@@ -120,7 +120,7 @@ test('what a shell command changed is recorded, and a long diff is paged through
       interrupted: false,
       bashEditDiff: {
         files: [
-          { filePath: '/repo/generated.ts', hunks: [hunk(Array<string>(50_200).fill('+x'))] },
+          { filePath: '/repo/generated.ts', hunks: [hunk(Array<string>(2500).fill('+x'))] },
           { filePath: CART, hunks: [hunk(['+y'])] },
           { filePath: '/repo/untouched.ts', hunks: [] },
         ],
@@ -131,11 +131,11 @@ test('what a shell command changed is recorded, and a long diff is paged through
   await $.tool.call({ tool: 'Bash', command: 'npm run generate' })
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ key: 'file:0' }))?.text).toContain('+50000')
+  expect((await ui.find({ key: 'file:0' }))?.text).toContain('+2000')
   expect(await ui.find({ key: 'file:1' })).toBeDefined()
   expect(await ui.find({ key: 'file:2' })).toBeUndefined()
   await ui.press({ key: 'file:0' })
-  expect(await ui.find({ text: /200 more lines of this diff not kept/ })).toBeDefined()
+  expect(await ui.find({ text: /500 more lines of this diff not kept/ })).toBeDefined()
 
   // The first page ends at row 499; the next page starts where it stopped, and leads back.
   expect(await ui.find({ key: 'row:0:0:499' })).toBeDefined()

@@ -10,10 +10,9 @@ const OPEN = { id: PANE, title: 'Review', focus: true, columns: 100 } as const
 const PAGE = 500
 // ponytail: two open files' pages fit; with more open, the rest waits until one is folded.
 const MAX_ROWS = 2 * PAGE
-// ponytail: an edit keeps its first 50,000 diff lines in session state and counts the rest in
-// `cut`, so a runaway generated file cannot bloat every later write. Upgrade: keep long diffs in
-// $.store, by file.
-const MAX_KEPT = 50_000
+// ponytail: an edit keeps its first 2000 diff lines in session state and counts the rest in `cut`,
+// so a generated file cannot bloat every later write. Upgrade: keep long diffs in $.store, by file.
+const MAX_KEPT = 2000
 
 const files = atom({ plugin: 'edit-review', key: 'files' } as const, [])
 const comments = atom({ plugin: 'edit-review', key: 'comments' } as const, [])
