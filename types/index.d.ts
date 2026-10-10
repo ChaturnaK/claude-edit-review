@@ -6,8 +6,8 @@ export type FileEdit = { path: string; edits: number; hunks: Hunk[] }
 /** Rows `from`..`to` (inclusive) of hunk `h` in the file's `hunks`. */
 export type Anchor = { h: number; from: number; to: number }
 
-/** No `at`: a comment on the whole file. */
-export type Draft = { path: string; at?: Anchor }
+/** No `at`: a comment on the whole file. `id`: the saved comment being edited, not a new one. */
+export type Draft = { path: string; at?: Anchor; id?: number }
 
 export type Comment = Draft & { id: number; label: string; quote: string[]; text: string }
 

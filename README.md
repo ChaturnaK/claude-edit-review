@@ -43,7 +43,7 @@ releases. Written against Claude Code 2.1.295.
 3. Open a file (click it, or move to it and press Enter) to see its diff.
 4. Click a diff line, or press Enter on it, and type a comment. Pick a second line in the same hunk
    while the comment box is open to cover the range between them. `comment on whole file` comments
-   on the file.
+   on the file. A saved comment has `Edit` and `Delete`.
 5. `Send N comments to Claude` submits them as one prompt and clears the review.
 
 | Key | Action |

@@ -79,6 +79,13 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await ui.input({ key: 'draft', text: 'Handle the empty cart.' })
     expect(await ui.find({ text: /Handle the empty cart\./ })).toBeDefined()
 
+    // Edit reopens the field on the saved comment and replaces its text in place.
+    await ui.press({ key: 'edit:1' })
+    expect(await ui.find({ key: 'del:1' })).toBeUndefined()
+    await ui.input({ key: 'draft', text: 'Handle the empty cart, please.' })
+    expect(await ui.find({ text: /^Handle the empty cart, please\.$/ })).toBeDefined()
+    expect(await ui.findAll({ text: /^Line 11$/ })).toHaveLength(1)
+
     // Every file's diff is in the pane at once: the second file takes comments with no switching.
     await ui.press({ key: 'file:1' })
     const fresh = await ui.findAll(surface === 'terminal' ? { key: 'row:1:0:0' } : { type: 'Code' })
@@ -90,7 +97,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(sent).toEqual([
       [
         'Review comments on your edits — address each one:',
-        `${CART}:11\n> ${LINES[1]}\n> ${LINES[2]}\nHandle the empty cart.`,
+        `${CART}:11\n> ${LINES[1]}\n> ${LINES[2]}\nHandle the empty cart, please.`,
         `${FRESH} (whole file)\nAdd a test.`,
       ].join('\n\n'),
     ])

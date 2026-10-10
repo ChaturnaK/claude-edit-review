@@ -305,9 +305,12 @@ export const register: Register = on => {
 
     // A second line picked in the hunk the open comment is on widens it to the range between.
     const pick = (path: string, index: number, l: number) => {
-      const at = open?.path === path && open.at?.h === index ? open.at : undefined
+      const widened = open?.path === path && open.at?.h === index ? open : undefined
+      const at = widened?.at
 
       return begin({
+        // A comment being edited stays the one being edited when its range is widened.
+        ...(widened?.id !== undefined ? { id: widened.id } : {}),
         path,
         at: { h: index, from: Math.min(at?.from ?? l, l), to: Math.max(at?.to ?? l, l) },
       })
@@ -320,10 +323,19 @@ export const register: Register = on => {
       await update($, draft, () => null)
       if (saved === null || text === '') return
       const now = await read($, files)
-      await update($, comments, all => [
-        ...all,
-        toComment(now, saved, 1 + Math.max(0, ...all.map(note => note.id)), text),
-      ])
+      const { id } = saved
+      await update($, comments, all =>
+        id === undefined
+          ? [...all, toComment(now, saved, 1 + Math.max(0, ...all.map(note => note.id)), text)]
+          : all.map(note => (note.id === id ? toComment(now, saved, id, text) : note)),
+      )
+    }
+
+    // The field opens where the comment is, holding its text; an empty save leaves it as it was.
+    const revise = (note: Comment) => {
+      typed = note.text
+
+      return begin({ id: note.id, path: note.path, ...(note.at ? { at: note.at } : {}) })
     }
 
     const submit = async () => {
@@ -350,7 +362,7 @@ export const register: Register = on => {
       ) : (
         <Box flexDirection="column" borderStyle="round" borderColor="warning" paddingX={1}>
           <Text bold color="warning">
-            {where}
+            {open?.id === undefined ? where : `Editing · ${where}`}
           </Text>
           <Box gap={1}>
             <Input
@@ -369,19 +381,24 @@ export const register: Register = on => {
         </Box>
       )
 
-    const drawn = (note: Comment) => (
-      <Box borderStyle="round" borderColor="warning" paddingX={1} gap={1}>
-        <Text bold color="warning">
-          {note.label ? `Line ${note.label}` : 'File'}
-        </Text>
-        <Text>{clean(note.text)}</Text>
-        <Button
-          key={`del:${note.id}`}
-          label="Delete"
-          onPress={() => update($, comments, all => all.filter(one => one.id !== note.id))}
-        />
-      </Box>
-    )
+    // The comment being edited is drawn as the field, not as its card.
+    const drawn = (note: Comment) =>
+      open?.id === note.id ? null : (
+        <Box borderStyle="round" borderColor="warning" paddingX={1} columnGap={1} flexWrap="wrap">
+          <Text bold color="warning">
+            {note.label ? `Line ${note.label}` : 'File'}
+          </Text>
+          <Text>{clean(note.text)}</Text>
+          {Input !== undefined && (
+            <Button key={`edit:${note.id}`} label="Edit" onPress={() => revise(note)} />
+          )}
+          <Button
+            key={`del:${note.id}`}
+            label="Delete"
+            onPress={() => update($, comments, all => all.filter(one => one.id !== note.id))}
+          />
+        </Box>
+      )
 
     return (
       <Box flexDirection="column">
