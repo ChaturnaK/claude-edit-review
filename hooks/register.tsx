@@ -30,9 +30,6 @@ type Edited = {
   content?: string
 }
 
-// What a Code's source may not hold: every control character but tab (newline is its line break).
-const CONTROL = /[\x00-\x08\x0a-\x1f\x7f]/g
-
 function toHunks(edited: Edited): Patch[] {
   if (edited.structuredPatch.length > 0) return edited.structuredPatch
   if (edited.type === 'create' && edited.content) {
@@ -105,30 +102,6 @@ function toComment(list: readonly FileEdit[], open: Draft, id: number, text: str
     label: span(hunk, at.from, at.to),
     quote: hunk.lines.slice(at.from, at.to + 1),
   }
-}
-
-/**
- * The first `rows` rows of a hunk as unified-diff hunks a `Code` draws, cut after each row in
- * `cuts` so a comment sits under the line it is on; `end` is the row a piece ends with.
- */
-export function pieces(hunk: Patch, rows: number, cuts: readonly number[]) {
-  const made: { end: number; source: string }[] = []
-  let before = hunk.oldStart
-  let after = hunk.newStart
-  let start = 0
-  for (let l = 0; l < rows; l++) {
-    if (l !== rows - 1 && !cuts.includes(l)) continue
-    const lines = hunk.lines.slice(start, l + 1)
-    const olds = lines.filter(line => line[0] !== '+').length
-    const news = lines.filter(line => line[0] !== '-').length
-    const header = `@@ -${before},${olds} +${after},${news} @@`
-    made.push({ end: l, source: [header, ...lines.map(line => line.replace(CONTROL, ''))].join('\n') })
-    before += olds
-    after += news
-    start = l + 1
-  }
-
-  return made
 }
 
 /** The prompt Submit sends: each comment as its place, the diff lines it is on, then the comment. */
@@ -217,7 +190,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const list = await read($, files)
-    if (e.props.hasSurvey || list.length === 0) return next(e)
+    if (e.surface !== 'terminal' || e.props.hasSurvey || list.length === 0) return next(e)
     const notes = await read($, comments)
     const { Box, Button, Text } = $.ui.resolve(e)
 
@@ -234,21 +207,18 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
-    const { Box, Button, Code, Text } = ui
+    const { Box, Button, Text } = ui
 
-    // The mobile app draws no text field or picker, so there is nothing to comment with.
-    if (!('Input' in ui) || !('Select' in ui)) {
+    // The desktop app has this built in, and better: its diff view takes a comment on any line.
+    if (e.surface !== 'terminal' || !('Input' in ui)) {
       return (
         <Box>
-          <Text dimColor>Reviewing edits needs a terminal or the desktop app.</Text>
+          <Text dimColor>edit-review is for the terminal. Here, use the built-in diff view.</Text>
         </Box>
       )
     }
 
-    const { Input, Select } = ui
-    // Only the terminal draws a Button's children styled and in fixed-width cells, so only there is
-    // each diff line a Button; elsewhere the diff is the engine's own Code and a Select picks the line.
-    const isCells = e.surface === 'terminal'
+    const { Input } = ui
     const list = await read($, files)
     const notes = await read($, comments)
     const open = await read($, draft)
@@ -401,41 +371,6 @@ export const register: Register = on => {
         const where = at ? `Line ${span(hunk, at.from, at.to)}` : ''
         const under = (l: number) => mine.filter(note => note.at?.h === index && note.at.to === l)
 
-        if (!isCells) {
-          const cuts = mine.flatMap(note => (note.at?.h === index ? [note.at.to] : []))
-          if (at) cuts.push(at.to)
-
-          return (
-            <Box flexDirection="column">
-              <Box gap={1}>
-                <Text dimColor>{title}</Text>
-                <Select
-                  key={`line:${f}:${index}`}
-                  label="Comment on line"
-                  value="none"
-                  options={[
-                    { value: 'none', label: 'choose a line' },
-                    ...rows.map((line, l) => ({
-                      value: String(l),
-                      label: `${lineNumbers[l] ?? ''} ${clean(line).slice(0, 60)}`,
-                    })),
-                  ]}
-                  onSelect={value => {
-                    if (value !== 'none') void pick(file.path, index, Number(value))
-                  }}
-                />
-              </Box>
-              {pieces(hunk, rows.length, cuts).map(piece => (
-                <Box flexDirection="column">
-                  <Code format="diff" path={file.path} source={piece.source} />
-                  {under(piece.end).map(drawn)}
-                  {at?.to === piece.end && field(where)}
-                </Box>
-              ))}
-            </Box>
-          )
-        }
-
         return (
           <Box flexDirection="column">
             <Text dimColor>{title}</Text>
@@ -497,7 +432,7 @@ export const register: Register = on => {
           />
           {undo}
         </Box>
-        {isCells && <Text dimColor>Open a file, then click a line (or press Enter on it) to comment.</Text>}
+        <Text dimColor>Open a file, then click a line (or press Enter on it) to comment.</Text>
         {list.map((file, f) => {
           const mine = notes.filter(note => note.path === file.path)
           const here = open?.path === file.path ? open : null

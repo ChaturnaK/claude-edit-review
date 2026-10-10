@@ -30,7 +30,7 @@ At the prompt of a Claude Code terminal session:
 ```
 
 Answer `y` to add the marketplace, then pick a scope. The mod is active at once, and in every
-session started afterwards. Installed at the user scope it also loads in the desktop app's Code tab.
+session started afterwards.
 
 It uses Claude Code's function-hooks plugin API, which is early access and can change between
 releases. Written against Claude Code 2.1.295.
@@ -79,8 +79,8 @@ Add a test.
 
 Not included: accepting or rejecting hunks, notebook edits, and comments that outlive the session.
 
-In the desktop app the diff is drawn by Claude Code's own diff view, which has no clickable lines,
-so each hunk has a `Comment on line` picker instead.
+This mod is for the terminal. The desktop app has the feature built in: open its diff view
+(`Cmd+Shift+D`), click a line to comment, and press `Cmd+Enter` to send the comments.
 
 ## Develop
 
@@ -92,4 +92,4 @@ claude plugin test .
 
 - `hooks/register.tsx` — the hooks module: edit capture, the pane, the band above the prompt.
 - `types/index.d.ts` — the `$.state` contract.
-- `hooks/review.test.ts` — capture → comment → send, on the terminal and desktop surfaces.
+- `hooks/review.test.ts` — capture → comment → send.
