@@ -1,0 +1,13 @@
+{
+  "name": "claude-edit-review",
+  "description": "A Review pane for Claude Code: comment on Claude's edits and send the comments back",
+  "owner": {
+    "name": "Chaturna Kasturiratna"
+  },
+  "plugins": [
+    {
+      "name": "edit-review",
+      "source": "./"
+    }
+  ]
+}
