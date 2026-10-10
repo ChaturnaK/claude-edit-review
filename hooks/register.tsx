@@ -7,9 +7,9 @@ const PANE = 'review'
 const OPEN = { id: PANE, title: 'Review', focus: true, columns: 100 } as const
 // A file's diff is drawn a page of rows at a time: the engine draws about 100,000 characters of a
 // pane, so a long diff is paged through, never cut.
-const PAGE = 500
-// ponytail: two open files' pages fit; with more open, the rest waits until one is folded.
-const MAX_ROWS = 2 * PAGE
+const PAGE = 200
+// ponytail: five open files' pages fit; with more open, the rest waits until one is folded.
+const MAX_ROWS = 5 * PAGE
 // ponytail: an edit keeps its first 2000 diff lines in session state and counts the rest in `cut`,
 // so a generated file cannot bloat every later write. Upgrade: keep long diffs in $.store, by file.
 const MAX_KEPT = 2000

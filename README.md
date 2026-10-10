@@ -91,7 +91,7 @@ Add a test.
 - Only edits made in the current session, after the mod loaded. It does not read `git diff`, so it
   works outside a git repository too.
 - An edit's diff is kept up to its first 2,000 lines; the pane says how many it left out.
-- A long diff is shown 500 lines at a time, with `next` and `previous` controls.
+- A long diff is shown 200 lines at a time, with `next` and `previous` controls.
 - A file edited several times lists each edit's hunks in order (`edit 1`, `edit 2`), with line
   numbers as of that edit. The quoted diff lines in a comment are what anchor it.
 

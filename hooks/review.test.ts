@@ -137,14 +137,14 @@ test('what a shell command changed is recorded, and a long diff is paged through
   await ui.press({ key: 'file:0' })
   expect(await ui.find({ text: /500 more lines of this diff not kept/ })).toBeDefined()
 
-  // The first page ends at row 499; the next page starts where it stopped, and leads back.
-  expect(await ui.find({ key: 'row:0:0:499' })).toBeDefined()
-  expect(await ui.find({ key: 'row:0:0:500' })).toBeUndefined()
+  // The first page ends at row 199; the next page starts where it stopped, and leads back.
+  expect(await ui.find({ key: 'row:0:0:199' })).toBeDefined()
+  expect(await ui.find({ key: 'row:0:0:200' })).toBeUndefined()
   expect(await ui.find({ key: 'prev:0' })).toBeUndefined()
   await ui.press({ key: 'next:0' })
-  expect(await ui.find({ key: 'row:0:0:499' })).toBeUndefined()
-  expect(await ui.find({ key: 'row:0:0:500' })).toBeDefined()
-  expect(await ui.find({ key: 'row:0:0:999' })).toBeDefined()
+  expect(await ui.find({ key: 'row:0:0:199' })).toBeUndefined()
+  expect(await ui.find({ key: 'row:0:0:200' })).toBeDefined()
+  expect(await ui.find({ key: 'row:0:0:399' })).toBeDefined()
   await ui.press({ key: 'prev:0' })
   expect(await ui.find({ key: 'row:0:0:0' })).toBeDefined()
 })
