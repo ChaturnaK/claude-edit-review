@@ -20,6 +20,8 @@ declare module 'claude-code' {
       draft: Draft | null
       /** The paths of the files whose diff is unfolded; every file starts folded. */
       expanded: string[]
+      /** By file path, the first diff row of the page shown; absent, the start. */
+      page: Record<string, number>
       /** What the last Submit or Mark reviewed cleared, kept so it can be undone. */
       last: { files: FileEdit[]; comments: Comment[] } | null
     }

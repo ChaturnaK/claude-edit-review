@@ -5,18 +5,22 @@ import type { Comment, Draft, FileEdit, Hunk } from '../types'
 
 const PANE = 'review'
 const OPEN = { id: PANE, title: 'Review', focus: true, columns: 100 } as const
-// ponytail: the pane draws the first 1000 diff lines of all files together; past that, page the
-// rows by e.props.scroll.
-const MAX_ROWS = 1000
-// ponytail: an edit keeps its first 2000 diff lines in session state and counts the rest in `cut`,
-// so a generated file cannot bloat every later write. Upgrade: keep long diffs in $.store, by file.
-const MAX_KEPT = 2000
+// A file's diff is drawn a page of rows at a time: the engine draws about 100,000 characters of a
+// pane, so a long diff is paged through, never cut.
+const PAGE = 500
+// ponytail: two open files' pages fit; with more open, the rest waits until one is folded.
+const MAX_ROWS = 2 * PAGE
+// ponytail: an edit keeps its first 50,000 diff lines in session state and counts the rest in
+// `cut`, so a runaway generated file cannot bloat every later write. Upgrade: keep long diffs in
+// $.store, by file.
+const MAX_KEPT = 50_000
 
 const files = atom({ plugin: 'edit-review', key: 'files' } as const, [])
 const comments = atom({ plugin: 'edit-review', key: 'comments' } as const, [])
 const draft = atom({ plugin: 'edit-review', key: 'draft' } as const, null)
 const last = atom({ plugin: 'edit-review', key: 'last' } as const, null)
 const expanded = atom({ plugin: 'edit-review', key: 'expanded' } as const, [])
+const page = atom({ plugin: 'edit-review', key: 'page' } as const, {})
 
 // The comment being typed. Not in $.state: a write there redraws the pane on every key.
 let typed = ''
@@ -119,6 +123,7 @@ const clean = (text: string) => text.replace(/\t/g, '  ').replace(/[\x00-\x1f\x7
 const short = (path: string) => path.split('/').slice(-2).join('/')
 const count = (file: FileEdit, mark: string) =>
   file.hunks.reduce((sum, hunk) => sum + hunk.lines.filter(line => line[0] === mark).length, 0)
+const size = (file: FileEdit) => file.hunks.reduce((rows, hunk) => rows + hunk.lines.length, 0)
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 /** Empties the review, keeping what it held in `last` for Undo. */
@@ -258,9 +263,11 @@ export const register: Register = on => {
 
     const unfolded = await read($, expanded)
     const isEveryOpen = list.every(file => unfolded.includes(file.path))
+    const pages = await read($, page)
+    // The rows the unfolded files want drawn: a page of each.
     const total = list
       .filter(file => unfolded.includes(file.path))
-      .reduce((sum, file) => sum + file.hunks.reduce((rows, hunk) => rows + hunk.lines.length, 0), 0)
+      .reduce((sum, file) => sum + Math.min(PAGE, size(file) - Math.min(pages[file.path] ?? 0, size(file))), 0)
     let room = MAX_ROWS
 
     const begin = async (next: Draft) => {
@@ -360,13 +367,18 @@ export const register: Register = on => {
         </Box>
       )
 
-    const hunkOf = (file: FileEdit, f: number, mine: readonly Comment[], here: Draft | null) =>
-      (hunk: Hunk, index: number) => {
-        const rows = hunk.lines.slice(0, room)
+    // Draws the part of each hunk that lies on the file's page, rows `from` on.
+    const hunkOf = (file: FileEdit, f: number, mine: readonly Comment[], here: Draft | null, from: number) => {
+      let before = 0
+
+      return (hunk: Hunk, index: number) => {
+        const first = Math.max(0, from - before)
+        const end = Math.min(hunk.lines.length, from + PAGE - before, first + room)
+        before += hunk.lines.length
+        if (end <= first) return null
+        room -= end - first
         const lineNumbers = numbers(hunk)
-        room -= rows.length
-        if (rows.length === 0) return null
-        const title = `Lines ${span(hunk, 0, rows.length - 1)}${file.edits > 1 ? `, edit ${hunk.edit}` : ''}`
+        const title = `Lines ${span(hunk, first, end - 1)}${file.edits > 1 ? `, edit ${hunk.edit}` : ''}`
         const at = here?.at?.h === index ? here.at : undefined
         const where = at ? `Line ${span(hunk, at.from, at.to)}` : ''
         const under = (l: number) => mine.filter(note => note.at?.h === index && note.at.to === l)
@@ -374,7 +386,8 @@ export const register: Register = on => {
         return (
           <Box flexDirection="column">
             <Text dimColor>{title}</Text>
-            {rows.map((line, l) => {
+            {hunk.lines.slice(first, end).map((line, row) => {
+              const l = first + row
               const isPicked = at !== undefined && l >= at.from && l <= at.to
               const paint =
                 line[0] === '+' ? { color: 'success' } : line[0] === '-' ? { color: 'error' } : { dimColor: true }
@@ -394,6 +407,7 @@ export const register: Register = on => {
           </Box>
         )
       }
+    }
 
     return (
       <Box flexDirection="column">
@@ -437,6 +451,9 @@ export const register: Register = on => {
           const mine = notes.filter(note => note.path === file.path)
           const here = open?.path === file.path ? open : null
           const isOpen = unfolded.includes(file.path)
+          const rows = size(file)
+          const from = Math.min(pages[file.path] ?? 0, Math.max(0, rows - 1))
+          const turn = (to: number) => update($, page, was => ({ ...was, [file.path]: to }))
 
           return (
             <Box flexDirection="column" marginTop={f === 0 || isOpen ? 1 : 0} marginBottom={isOpen ? 1 : 0}>
@@ -466,14 +483,34 @@ export const register: Register = on => {
               {isOpen && here !== null && here.at === undefined && field('Whole file')}
               {isOpen && mine.filter(note => note.at === undefined).map(drawn)}
               {isOpen && file.hunks.length === 0 && <Text dimColor>Diff unavailable for this edit.</Text>}
-              {isOpen && file.hunks.map(hunkOf(file, f, mine, here))}
+              {isOpen && from > 0 && (
+                <Button
+                  key={`prev:${f}`}
+                  plain
+                  dimColor
+                  label={`↑ previous ${Math.min(PAGE, from)} lines`}
+                  onPress={() => turn(Math.max(0, from - PAGE))}
+                />
+              )}
+              {isOpen && file.hunks.map(hunkOf(file, f, mine, here, from))}
+              {isOpen && from + PAGE < rows && (
+                <Button
+                  key={`next:${f}`}
+                  plain
+                  dimColor
+                  label={`↓ next ${Math.min(PAGE, rows - from - PAGE)} lines (${from + 1}-${from + PAGE} of ${rows} shown)`}
+                  onPress={() => turn(from + PAGE)}
+                />
+              )}
               {isOpen && (file.cut ?? 0) > 0 && (
                 <Text dimColor>{`… ${plural(file.cut ?? 0, 'more line')} of this diff not kept`}</Text>
               )}
             </Box>
           )
         })}
-        {total > MAX_ROWS && <Text dimColor>{`… ${total - MAX_ROWS} more lines not shown`}</Text>}
+        {total > MAX_ROWS && (
+          <Text dimColor>{`… ${total - MAX_ROWS} more lines wait for room: fold a file to see them`}</Text>
+        )}
       </Box>
     )
   })
