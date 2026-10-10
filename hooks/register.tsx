@@ -385,23 +385,23 @@ export const register: Register = on => {
         return (
           <Box flexDirection="column">
             <Text dimColor>{title}</Text>
-            {hunk.lines.slice(first, end).map((line, row) => {
+            {hunk.lines.slice(first, end).flatMap((line, row) => {
               const l = first + row
               const isPicked = at !== undefined && l >= at.from && l <= at.to
               const paint =
                 line[0] === '+' ? { color: 'success' } : line[0] === '-' ? { color: 'error' } : { dimColor: true }
 
-              return (
-                <Box flexDirection="column">
-                  <Button key={`row:${f}:${index}:${l}`} plain onPress={() => pick(file.path, index, l)}>
-                    <Text color="warning">{isPicked ? '▌' : ' '}</Text>
-                    <Text dimColor>{`${String(lineNumbers[l] ?? '').padStart(5)} `}</Text>
-                    <Text {...paint}>{fit(clean(line), columns - 8)}</Text>
-                  </Button>
-                  {under(l).map(drawn)}
-                  {at?.to === l && field(where)}
-                </Box>
-              )
+              // Three elements a row, flat: a long page is what the terminal has to lay out.
+              return [
+                <Button key={`row:${f}:${index}:${l}`} plain onPress={() => pick(file.path, index, l)}>
+                  <Text {...(isPicked ? { color: 'warning' } : { dimColor: true })}>
+                    {`${isPicked ? '▌' : ' '}${String(lineNumbers[l] ?? '').padStart(5)} `}
+                  </Text>
+                  <Text {...paint}>{fit(clean(line), columns - 8)}</Text>
+                </Button>,
+                ...under(l).map(drawn),
+                at?.to === l && field(where),
+              ]
             })}
           </Box>
         )
