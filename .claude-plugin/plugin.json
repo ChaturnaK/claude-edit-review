@@ -1,7 +1,11 @@
 {
   "name": "edit-review",
   "version": "0.1.0",
-  "description": "Review Claude's edits in a pane, comment per file or line, and send the comments back to Claude",
-  "author": { "name": "Chaturna Kasturiratna" },
+  "description": "Review Claude's edits in the terminal: comment per file or line, and send the comments back to Claude",
+  "author": {
+    "name": "Chaturna Kasturiratna"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/ChaturnaK/claude-edit-review",
   "types": "./types/index.d.ts"
 }
