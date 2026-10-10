@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { parsePatch, pieces } from './register'
+import { pieces } from './register'
 
 const CART = '/repo/src/cart.ts'
 const FRESH = '/repo/src/fresh.ts'
@@ -121,14 +121,37 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 }
 
-test('a git patch parses into hunks, and a hunk is cut where a comment goes', () => {
-  const hunks = parsePatch(`--- a/cart.ts\n+++ b/cart.ts\n@@ -10,3 +10,3 @@\n${LINES.join('\n')}`)
-  expect(hunks).toEqual([{ oldStart: 10, newStart: 10, lines: LINES }])
-  const anchored = hunks.map(hunk => ({ ...hunk, edit: 1 }))
+test('a hunk is cut where a comment goes', () => {
   // Cut after the removed line: each piece is a hunk of its own, numbered on from the last.
-  const [hunk] = anchored
-  expect(hunk && pieces(hunk, 4, [1])).toEqual([
+  expect(pieces({ oldStart: 10, newStart: 10, lines: LINES }, 4, [1])).toEqual([
     { end: 1, source: `@@ -10,2 +10,1 @@\n${LINES[0]}\n${LINES[1]}` },
     { end: 3, source: `@@ -12,1 +11,2 @@\n${LINES[2]}\n${LINES[3]}` },
   ])
+})
+
+test('what a shell command changed is recorded, a long diff cut short', async ($, on) => {
+  const hunk = (lines: string[]) => ({ oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, lines })
+  on('tool.call', { tool: 'Bash' }, () => ({
+    result: {
+      stdout: '',
+      stderr: '',
+      interrupted: false,
+      bashEditDiff: {
+        files: [
+          { filePath: '/repo/generated.ts', hunks: [hunk(Array<string>(2500).fill('+x'))] },
+          { filePath: CART, hunks: [hunk(['+y'])] },
+          { filePath: '/repo/untouched.ts', hunks: [] },
+        ],
+        moreFiles: 0,
+      },
+    },
+  }))
+  await $.tool.call({ tool: 'Bash', command: 'npm run generate' })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ key: 'file:0' }))?.text).toContain('+2000')
+  expect(await ui.find({ key: 'file:1' })).toBeDefined()
+  expect(await ui.find({ key: 'file:2' })).toBeUndefined()
+  await ui.press({ key: 'file:0' })
+  expect(await ui.find({ text: /500 more lines of this diff not kept/ })).toBeDefined()
 })

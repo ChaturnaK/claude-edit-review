@@ -8,6 +8,9 @@ const OPEN = { id: PANE, title: 'Review', focus: true, columns: 100 } as const
 // ponytail: the pane draws the first 1000 diff lines of all files together; past that, page the
 // rows by e.props.scroll.
 const MAX_ROWS = 1000
+// ponytail: an edit keeps its first 2000 diff lines in session state and counts the rest in `cut`,
+// so a generated file cannot bloat every later write. Upgrade: keep long diffs in $.store, by file.
+const MAX_KEPT = 2000
 
 const files = atom({ plugin: 'edit-review', key: 'files' } as const, [])
 const comments = atom({ plugin: 'edit-review', key: 'comments' } as const, [])
@@ -22,7 +25,6 @@ type Patch = { oldStart: number; newStart: number; lines: string[] }
 type Edited = {
   filePath: string
   structuredPatch: Patch[]
-  gitDiff?: { patch: string }
   staged?: boolean
   type?: 'create' | 'update'
   content?: string
@@ -30,25 +32,9 @@ type Edited = {
 
 // What a Code's source may not hold: every control character but tab (newline is its line break).
 const CONTROL = /[\x00-\x08\x0a-\x1f\x7f]/g
-const HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/
-
-export function parsePatch(patch: string): Patch[] {
-  const hunks: Patch[] = []
-  for (const line of patch.split('\n')) {
-    const header = HEADER.exec(line)
-    if (header) {
-      hunks.push({ oldStart: Number(header[1]), newStart: Number(header[2]), lines: [] })
-    } else if (/^[ +-]/.test(line)) {
-      hunks.at(-1)?.lines.push(line)
-    }
-  }
-
-  return hunks
-}
 
 function toHunks(edited: Edited): Patch[] {
   if (edited.structuredPatch.length > 0) return edited.structuredPatch
-  if (edited.gitDiff?.patch) return parsePatch(edited.gitDiff.patch)
   if (edited.type === 'create' && edited.content) {
     const lines = edited.content.replace(/\n$/, '').split('\n')
 
@@ -60,20 +46,30 @@ function toHunks(edited: Edited): Patch[] {
 
 // ponytail: each edit's hunks are kept as made, so a later edit to the same file can shift an
 // earlier hunk's line numbers. Upgrade: diff the first originalFile against the file as it is now.
-const record = ($: StateDollar, edited: Edited) =>
-  update($, files, list => {
-    const old = list.find(file => file.path === edited.filePath)
-    const edit = (old?.edits ?? 0) + 1
-    const hunks = toHunks(edited).map(({ oldStart, newStart, lines }) => ({
-      edit,
-      oldStart,
-      newStart,
-      lines: [...lines],
-    }))
-    const file = { path: edited.filePath, edits: edit, hunks: [...(old?.hunks ?? []), ...hunks] }
+function add(list: readonly FileEdit[], edited: Edited): FileEdit[] {
+  const old = list.find(file => file.path === edited.filePath)
+  const edit = (old?.edits ?? 0) + 1
+  let room = MAX_KEPT
+  let cut = old?.cut ?? 0
+  const hunks = toHunks(edited).flatMap(({ oldStart, newStart, lines }) => {
+    const kept = lines.slice(0, room)
+    room -= kept.length
+    cut += lines.length - kept.length
 
-    return old ? list.map(one => (one === old ? file : one)) : [...list, file]
+    return kept.length > 0 ? [{ edit, oldStart, newStart, lines: kept }] : []
   })
+  const file = { path: edited.filePath, edits: edit, cut, hunks: [...(old?.hunks ?? []), ...hunks] }
+
+  return old ? list.map(one => (one === old ? file : one)) : [...list, file]
+}
+
+/** Records the edits of one tool call in one write. Observes only: a failure here stays here. */
+async function record($: StateDollar, edits: readonly Edited[]) {
+  try {
+    const made = edits.filter(edited => !edited.staged)
+    if (made.length > 0) await update($, files, list => made.reduce(add, list))
+  } catch {}
+}
 
 /** Each row's line number: the old file's for a removed line, the new file's otherwise. */
 function numbers(hunk: Hunk): number[] {
@@ -190,25 +186,17 @@ export const register: Register = on => {
     return { text: opened.isPlaced ? 'Review pane opened.' : `Review pane is waiting: ${opened.reason}` }
   })
 
-  // Observes only: the tool's own answer goes back unchanged, whatever happens here.
+  // The three capture hooks only observe: the tool's own answer goes back unchanged.
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
     const ran = await next(e)
-    try {
-      if (ran.deny === undefined && ran.isError !== true && !ran.result.staged) {
-        await record($, ran.result)
-      }
-    } catch {}
+    if (ran.deny === undefined && ran.isError !== true) await record($, [ran.result])
 
     return ran
   }).catch(($, e, next) => next(e))
 
   on('tool.call', { tool: 'Write' }, async ($, e, next) => {
     const ran = await next(e)
-    try {
-      if (ran.deny === undefined && ran.isError !== true && !ran.result.staged) {
-        await record($, ran.result)
-      }
-    } catch {}
+    if (ran.deny === undefined && ran.isError !== true) await record($, [ran.result])
 
     return ran
   }).catch(($, e, next) => next(e))
@@ -216,15 +204,13 @@ export const register: Register = on => {
   // What a shell command changed (sed, a formatter, a generator) is Claude's edit too.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
-    try {
-      if (ran.deny === undefined && ran.isError !== true) {
-        for (const file of ran.result.bashEditDiff?.files ?? []) {
-          if (file.hunks.length > 0) {
-            await record($, { filePath: file.filePath, structuredPatch: file.hunks })
-          }
-        }
-      }
-    } catch {}
+    if (ran.deny === undefined && ran.isError !== true) {
+      const changed = (ran.result.bashEditDiff?.files ?? []).filter(file => file.hunks.length > 0)
+      await record(
+        $,
+        changed.map(file => ({ filePath: file.filePath, structuredPatch: file.hunks })),
+      )
+    }
 
     return ran
   }).catch(($, e, next) => next(e))
@@ -249,8 +235,17 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
     const { Box, Button, Code, Text } = ui
-    const Input = 'Input' in ui ? ui.Input : undefined
-    const Select = 'Select' in ui ? ui.Select : undefined
+
+    // The mobile app draws no text field or picker, so there is nothing to comment with.
+    if (!('Input' in ui) || !('Select' in ui)) {
+      return (
+        <Box>
+          <Text dimColor>Reviewing edits needs a terminal or the desktop app.</Text>
+        </Box>
+      )
+    }
+
+    const { Input, Select } = ui
     // Only the terminal draws a Button's children styled and in fixed-width cells, so only there is
     // each diff line a Button; elsewhere the diff is the engine's own Code and a Select picks the line.
     const isCells = e.surface === 'terminal'
@@ -356,30 +351,27 @@ export const register: Register = on => {
       }
     }
 
-    const field = (where: string) =>
-      Input === undefined ? (
-        <Text dimColor>Commenting needs a surface with a text field.</Text>
-      ) : (
-        <Box flexDirection="column" borderStyle="round" borderColor="warning" paddingX={1}>
-          <Text bold color="warning">
-            {open?.id === undefined ? where : `Editing · ${where}`}
-          </Text>
-          <Box gap={1}>
-            <Input
-              key="draft"
-              placeholder="Add a comment, Enter to save"
-              value={typed}
-              submitLabel="save"
-              autoFocus
-              onInput={value => {
-                typed = value
-              }}
-              onSubmit={save}
-            />
-            <Button key="cancel" label="Cancel" onPress={() => save('')} />
-          </Box>
+    const field = (where: string) => (
+      <Box flexDirection="column" borderStyle="round" borderColor="warning" paddingX={1}>
+        <Text bold color="warning">
+          {open?.id === undefined ? where : `Editing · ${where}`}
+        </Text>
+        <Box gap={1}>
+          <Input
+            key="draft"
+            placeholder="Add a comment, Enter to save"
+            value={typed}
+            submitLabel="save"
+            autoFocus
+            onInput={value => {
+              typed = value
+            }}
+            onSubmit={save}
+          />
+          <Button key="cancel" label="Cancel" onPress={() => save('')} />
         </Box>
-      )
+      </Box>
+    )
 
     // The comment being edited is drawn as the field, not as its card.
     const drawn = (note: Comment) =>
@@ -389,9 +381,7 @@ export const register: Register = on => {
             {note.label ? `Line ${note.label}` : 'File'}
           </Text>
           <Text>{clean(note.text)}</Text>
-          {Input !== undefined && (
-            <Button key={`edit:${note.id}`} label="Edit" onPress={() => revise(note)} />
-          )}
+          <Button key={`edit:${note.id}`} label="Edit" onPress={() => revise(note)} />
           <Button
             key={`del:${note.id}`}
             label="Delete"
@@ -399,6 +389,76 @@ export const register: Register = on => {
           />
         </Box>
       )
+
+    const hunkOf = (file: FileEdit, f: number, mine: readonly Comment[], here: Draft | null) =>
+      (hunk: Hunk, index: number) => {
+        const rows = hunk.lines.slice(0, room)
+        const lineNumbers = numbers(hunk)
+        room -= rows.length
+        if (rows.length === 0) return null
+        const title = `Lines ${span(hunk, 0, rows.length - 1)}${file.edits > 1 ? `, edit ${hunk.edit}` : ''}`
+        const at = here?.at?.h === index ? here.at : undefined
+        const where = at ? `Line ${span(hunk, at.from, at.to)}` : ''
+        const under = (l: number) => mine.filter(note => note.at?.h === index && note.at.to === l)
+
+        if (!isCells) {
+          const cuts = mine.flatMap(note => (note.at?.h === index ? [note.at.to] : []))
+          if (at) cuts.push(at.to)
+
+          return (
+            <Box flexDirection="column">
+              <Box gap={1}>
+                <Text dimColor>{title}</Text>
+                <Select
+                  key={`line:${f}:${index}`}
+                  label="Comment on line"
+                  value="none"
+                  options={[
+                    { value: 'none', label: 'choose a line' },
+                    ...rows.map((line, l) => ({
+                      value: String(l),
+                      label: `${lineNumbers[l] ?? ''} ${clean(line).slice(0, 60)}`,
+                    })),
+                  ]}
+                  onSelect={value => {
+                    if (value !== 'none') void pick(file.path, index, Number(value))
+                  }}
+                />
+              </Box>
+              {pieces(hunk, rows.length, cuts).map(piece => (
+                <Box flexDirection="column">
+                  <Code format="diff" path={file.path} source={piece.source} />
+                  {under(piece.end).map(drawn)}
+                  {at?.to === piece.end && field(where)}
+                </Box>
+              ))}
+            </Box>
+          )
+        }
+
+        return (
+          <Box flexDirection="column">
+            <Text dimColor>{title}</Text>
+            {rows.map((line, l) => {
+              const isPicked = at !== undefined && l >= at.from && l <= at.to
+              const paint =
+                line[0] === '+' ? { color: 'success' } : line[0] === '-' ? { color: 'error' } : { dimColor: true }
+
+              return (
+                <Box flexDirection="column">
+                  <Button key={`row:${f}:${index}:${l}`} plain onPress={() => pick(file.path, index, l)}>
+                    <Text color="warning">{isPicked ? '▌' : ' '}</Text>
+                    <Text dimColor>{`${String(lineNumbers[l] ?? '').padStart(5)} `}</Text>
+                    <Text {...paint}>{fit(clean(line), columns - 8)}</Text>
+                  </Button>
+                  {under(l).map(drawn)}
+                  {at?.to === l && field(where)}
+                </Box>
+              )
+            })}
+          </Box>
+        )
+      }
 
     return (
       <Box flexDirection="column">
@@ -437,9 +497,7 @@ export const register: Register = on => {
           />
           {undo}
         </Box>
-        {isCells && Input !== undefined && (
-          <Text dimColor>Open a file, then click a line (or press Enter on it) to comment.</Text>
-        )}
+        {isCells && <Text dimColor>Open a file, then click a line (or press Enter on it) to comment.</Text>}
         {list.map((file, f) => {
           const mine = notes.filter(note => note.path === file.path)
           const here = open?.path === file.path ? open : null
@@ -461,7 +519,7 @@ export const register: Register = on => {
                 <Text color="error">{` -${count(file, '-')}`}</Text>
                 <Text color="warning">{mine.length > 0 ? ` ${plural(mine.length, 'comment')}` : ''}</Text>
               </Button>
-              {isOpen && Input !== undefined && (
+              {isOpen && (
                 <Button
                   key={`on-file:${f}`}
                   plain
@@ -473,85 +531,10 @@ export const register: Register = on => {
               {isOpen && here !== null && here.at === undefined && field('Whole file')}
               {isOpen && mine.filter(note => note.at === undefined).map(drawn)}
               {isOpen && file.hunks.length === 0 && <Text dimColor>Diff unavailable for this edit.</Text>}
-              {isOpen &&
-                file.hunks.map((hunk, index) => {
-                const rows = hunk.lines.slice(0, room)
-                const lineNumbers = numbers(hunk)
-                room -= rows.length
-                if (rows.length === 0) return null
-                const title = `Lines ${span(hunk, 0, rows.length - 1)}${file.edits > 1 ? `, edit ${hunk.edit}` : ''}`
-                const at = here?.at?.h === index ? here.at : undefined
-                const where = at ? `Line ${span(hunk, at.from, at.to)}` : ''
-                const under = (l: number) => mine.filter(note => note.at?.h === index && note.at.to === l)
-
-                if (!isCells) {
-                  const cuts = mine.flatMap(note => (note.at?.h === index ? [note.at.to] : []))
-                  if (at) cuts.push(at.to)
-
-                  return (
-                    <Box flexDirection="column">
-                      <Box gap={1}>
-                        <Text dimColor>{title}</Text>
-                        {Select !== undefined && Input !== undefined && (
-                          <Select
-                            key={`line:${f}:${index}`}
-                            label="Comment on line"
-                            value="none"
-                            options={[
-                              { value: 'none', label: 'choose a line' },
-                              ...rows.map((line, l) => ({
-                                value: String(l),
-                                label: `${lineNumbers[l] ?? ''} ${clean(line).slice(0, 60)}`,
-                              })),
-                            ]}
-                            onSelect={value => {
-                              if (value !== 'none') void pick(file.path, index, Number(value))
-                            }}
-                          />
-                        )}
-                      </Box>
-                      {pieces(hunk, rows.length, cuts).map(piece => (
-                        <Box flexDirection="column">
-                          <Code format="diff" path={file.path} source={piece.source} />
-                          {under(piece.end).map(drawn)}
-                          {at?.to === piece.end && field(where)}
-                        </Box>
-                      ))}
-                    </Box>
-                  )
-                }
-
-                return (
-                  <Box flexDirection="column">
-                    <Text dimColor>{title}</Text>
-                    {rows.map((line, l) => {
-                      const isPicked = at !== undefined && l >= at.from && l <= at.to
-                      const paint =
-                        line[0] === '+'
-                          ? { color: 'success' }
-                          : line[0] === '-'
-                            ? { color: 'error' }
-                            : { dimColor: true }
-
-                      return (
-                        <Box flexDirection="column">
-                          <Button
-                            key={`row:${f}:${index}:${l}`}
-                            plain
-                            onPress={() => pick(file.path, index, l)}
-                          >
-                            <Text color="warning">{isPicked ? '▌' : ' '}</Text>
-                            <Text dimColor>{`${String(lineNumbers[l] ?? '').padStart(5)} `}</Text>
-                            <Text {...paint}>{fit(clean(line), columns - 8)}</Text>
-                          </Button>
-                          {under(l).map(drawn)}
-                          {at?.to === l && field(where)}
-                        </Box>
-                      )
-                    })}
-                  </Box>
-                )
-              })}
+              {isOpen && file.hunks.map(hunkOf(file, f, mine, here))}
+              {isOpen && (file.cut ?? 0) > 0 && (
+                <Text dimColor>{`… ${plural(file.cut ?? 0, 'more line')} of this diff not kept`}</Text>
+              )}
             </Box>
           )
         })}

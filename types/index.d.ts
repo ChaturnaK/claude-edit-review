@@ -1,7 +1,8 @@
 /** One diff hunk; `lines` carry their ' ', '+' or '-' marker. `edit` is which edit of the file made it (1-based). */
 export type Hunk = { edit: number; oldStart: number; newStart: number; lines: string[] }
 
-export type FileEdit = { path: string; edits: number; hunks: Hunk[] }
+/** `cut`: diff lines of this file's edits that were too many to keep. */
+export type FileEdit = { path: string; edits: number; hunks: Hunk[]; cut?: number }
 
 /** Rows `from`..`to` (inclusive) of hunk `h` in the file's `hunks`. */
 export type Anchor = { h: number; from: number; to: number }
